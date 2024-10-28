@@ -32,7 +32,7 @@ if __name__ == "__main__":
         nd_id += 1
 
     num = 0
-    feat_list, feat_size = [], num_node//interval_size + 1
+    feat_list, feat_size = [], 1024
 
     for nd in g.nodes():#range(num_node):
         print('nd', num)
@@ -42,8 +42,8 @@ if __name__ == "__main__":
         curr_feat = [0.0]*feat_size#[0.0]*(min_nei//interval_size)
         t1 = time.time()
         for nei in nei_list:
-            row = node_dict[nei]//interval_size
-            curr_feat[row] += 1.0
+            row = node_dict[nei]//(num_node//1024)
+            curr_feat[min(row,1023)] += 1.0
             
         feat_list.append(curr_feat)
         num += 1

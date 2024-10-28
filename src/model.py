@@ -16,7 +16,7 @@ class Poligras(torch.nn.Module):
         self.args = args
 
         ## set up the MLP structure and learnable parameters in the policy function
-        self.interLayer_first = torch.nn.Linear(self.args.feat_dim, self.args.hidden_size1)
+        self.interLayer_first = torch.nn.Linear(1024, self.args.hidden_size1)
         self.fully_connected_second = torch.nn.Linear(self.args.hidden_size1, self.args.hidden_size2)
         self.dropout = torch.nn.Dropout(p=self.args.dropout)
 
@@ -42,77 +42,88 @@ class Poligras(torch.nn.Module):
 
 
 class PoligrasRunner(object):
-
+    #读取数据集
     def __init__(self, args):
-        print("\n-------Model initializing---------.\n")
-
+        print("------model initializing------\n")
+        
         self.args = args
-
-        ## load graph structure
-        g_file = open('./dataset/' + self.args.dataset + '/' + self.args.dataset + '_graph', 'rb')
-        loaded_graph = pickle.load(g_file)
-        g_file.close()
-        self.init_graph = loaded_graph['G']
-
-        ## load node features
-        g_file = open('./dataset/' + self.args.dataset + '/' + self.args.dataset + '_feat', 'rb')
-        loaded_data = pickle.load(g_file)
-        g_file.close()
-        self.node_feat = loaded_data['feat']
-        self.args.feat_dim = self.node_feat.size()[1]
-        # print('feat size: ', self.args.feat_dim)
+        
+        self.init_graphs = {}
+        self.node_feats = {}
+        
+        #读取数据集
+        for dataset in self.args.dataset + self.args.test_datasets:
+            print(f'loading {dataset}\n')
+            #读取图和点
+            g_file = open(f'./dataset/{dataset}/{dataset}_graph','rb')
+            loaded_graph = pickle.load(g_file)
+            g_file.close()
+            self.init_graphs[dataset] = loaded_graph['G']
+            
+            g_file = open(f'./dataset/{dataset}/{dataset}_feat','rb')
+            loaded_feat = pickle.load(g_file)
+            g_file.close()
+            self.node_feats[dataset] = loaded_feat['feat']
+            print(f'loaded {dataset}')
         self.model = Poligras(self.args)
-
-        init_superNodes_dict = {} ## each initial node belongs to the supernode of its own
-        self.node_belonging = {} ## to record which supernode one specific initial node belongs to
+       
+       
+       
+        
+    #读取数据集的数据，做预处理
+    def load_data_of_dataset(self ,dataset):
+        #读取数据
+        self.init_graph = self.init_graphs[dataset]
+        self.node_feat = self.node_feats[dataset]
+        #预处理
+        #   -建立超节点集合
+        init_supernode_dict = {}
+        self.node_belonging = {}
         for node in self.init_graph.nodes():
-            init_superNodes_dict[node] = [node] ## initially each supernode only has one initial node
+            init_supernode_dict[node] = node
             self.node_belonging[node] = node
-
-
+        #   -为节点编号
         ij = 0
-        self.init_nd_idx = {} ## to record the index of initial nodes
-        for nd in self.init_graph.nodes():
-            self.init_nd_idx[nd] = ij
+        self.init_nd_idx = {}
+        for node in self.init_graph.nodes():
+            self.init_nd_idx[node] = ij
             ij += 1
-
-        ## compute the initial group partitioning(index)
-        self.num_partitions = self.init_graph.number_of_nodes()//self.args.group_size
-
+        #   -超节点初始划分
+        self.num_patitions = self.init_graph.number_of_nodes() // self.args.group_size
         h_function = list(range(self.init_graph.number_of_nodes()))
         random.shuffle(h_function)
-
-
+        
         F_A_dict = {}
-        for A in init_superNodes_dict:
+        for A in init_supernode_dict:
             F_A = self.init_graph.number_of_nodes()
-            for v in init_superNodes_dict[A]:
+            for v in init_supernode_dict[A]:
                 f_v = self.init_graph.number_of_nodes()
                 for u in list(self.init_graph[v]) + [v]:
-                    if(h_function[self.init_nd_idx[int(u)]] < f_v):
+                    if(f_v < h_function[self.init_nd_idx[int(u)]]):
                         f_v = h_function[self.init_nd_idx[int(u)]]
-
                 if(f_v < F_A):
                     F_A = f_v
-
             F_A_dict[A] = F_A
-        F_A_list = sorted(F_A_dict.items(), key=lambda item:item[1])
-
-        init_groupIndex = [] ## to store the initial nodes indices contained in each group
-        for i in range(self.num_partitions):
-            curr_idx = []
-            for j in F_A_list[int(i*len(F_A_list)/self.num_partitions): int((i+1)*len(F_A_list)/self.num_partitions)]:
-                curr_idx.append(j[0])
-            
-            init_groupIndex.append(np.array(curr_idx))
-
-        # print('index size: ', len(init_groupIndex))
-        self.best_superNodes_dict = init_superNodes_dict
+        F_A_list = sorted(F_A_dict.items(),key=lambda item:item[1])
         
-        ## store the data for the following use
-        f = open('./{}_{}_.best_temp'.format(self.args.dataset, 0), 'wb')
-        pickle.dump({'g':self.init_graph, 'group_index':init_groupIndex, 'superNodes_dict':init_superNodes_dict}, f)
+        init_groupIndex = []
+        for i in range(self.num_patitions):
+            curr_idx = []
+            for j in F_A_list[i*len(F_A_list)/self.num_patitions:(i+1)*len(F_A_list)/self.num_patitions]:
+                curr_idx.append(j[0])
+            init_groupIndex.append(curr_idx)      
+        
+        #   -存储目前最好的超节点集
+        self.best_supernode_dict = init_supernode_dict
+        
+        #   -存储初始分区数据
+        with open(f'./{dataset}_0_best_temp','wb') as f:
+            pickle.dump({'g':self.init_graph,'group_index':init_groupIndex,'superNodes_dict':init_supernode_dict},f)
         f.close()
+        print(f'{dataset}数据集初始完成\n')
+        
+            
+            
  
  
     def select_action(self, curr_feat):
@@ -421,129 +432,146 @@ class PoligrasRunner(object):
 
 #---------------------------------------------------------------------------------------------------------------------------------
     def fit(self):
-        print("\n-------Model running---------.\n")
-
-        # total_rewards = 0 
+        print("--------model initializing-----------\n")
+        #怎么写捏
+        #n个数据集一个接一个训练算一个小循环，要训练m次小循环
+        #首先外层循环设置m次
+        #再设置数据集循环
+        #加载数据集数据，预处理，即load_data_of_dataset
+        #调用selection获取节点对，再调用update_graph,计算损失函数更新模型参数
+        #超过最好奖励就更新最好奖励，保存模型数据，小于特定奖励就重新分组（照旧）
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr, weight_decay=self.args.weight_decay)
+        self.max_reward_by_inner_iteration = 0
+        
+        for epoch in range(10):
+            print(f'{epoch}----{epoch}/9 (0~9)\n')
+            
+            for dataset in self.args.dataset:
+                print(f'{dataset}开始训练\n')
+                #加载、预处理数据集
+                self.load_data_of_dataset(dataset)
+                #进入训练模式
+                self.model.train() 
+                #每个数据集根据设定轮数训练 
+                for count in range(self.args.counts):
+                    #最大奖励、累计小奖励轮数
+                    best,bad_counter = -1000000,0
+                    while True:
+                        g_file = open(f'./{dataset}_{count}_.best_temp','rb')
+                        loaded_compre = pickle.load(g_file)
+                        g_file.close()
 
-        self.max_reward_by_inner_iter = 0## "max_reward_by_inner_iter" is to help judge and execute the group re-partitioning
-        self.model.train()
-        # init_time = time.time()
-        for count in range(self.args.counts):
-            best, bad_counter = -1000000, 0
+                        self.curr_graph = loaded_compre['g']
+                        self.group_index = loaded_compre['group_index']
+                        self.superNodes_dict = loaded_compre['superNodes_dict']
+                        self.curr_feat = copy.deepcopy(self.node_feat)
+                        
+                        #count_reward 本次while循环的累计奖励
+                        count_reward, batch_id = 0, 0
+                        traverse_time = 0
+                        for idx in range(len(self.group_index)):
+                            if len(self.group_index[idx]) < 3:
+                                continue
+                            curr_row,curr_col = self.select_action(self.curr_feat[[self.init_nd_idx[i] for i in self.group_index[idx]]])
+                            curr_reward = self.update_graph(self.group_index[idx][curr_row],self.group_index[idx][curr_col],self.curr_graph)
+                            if(curr_reward > 0):
+                                count_reward += curr_reward
+                                self.group_index[idx] = np.delete(self.group_index[idx],curr_col)
+                                
+                        #计算并更新策略损失
+                        policy_loss = 0
+                        returns = torch.FloatTensor(self.model.rewards)
+                        returns = (returns-max(returns.mean,0))/returns.std()
+                        
+                        for log_prob, R in zip(self.model.saved_log_probs,returns):
+                            policy_loss += -log_prob * R
+                        #梯度清零
+                        self.optimizer.zero_grad()
+                        policy_loss.backward()
+                        self.optimizer.step()
+                        
+                        print(f'count:{count},positive reward:{count_reward}\n')
+                        
+                        del self.model.rewards[:]
+                        del self.model.saved_log_probs[:]
+                        
+                        # 设置奖励更新规则
+                        if count < 5:
+                            ratio = 0.001
+                        else:
+                            ratio = 0.01
 
-            while(True):
-                # start_time = time.time()
-                g_file = open('./{}_{}_.best_temp'.format(self.args.dataset, count), 'rb')
-                loaded_compre = pickle.load(g_file)
-                g_file.close()
+                        if count_reward > (1 + ratio) * best:
+                            best, bad_counter = count_reward, 0
+                            self.best_graph, self.best_currFeat, self.best_groupIndex = self.curr_graph, self.curr_feat, self.group_index
+                            self.best_superNodes_dict = self.superNodes_dict
+                        else:
+                            bad_counter += 1
 
-                self.curr_graph = loaded_compre['g']
-                self.group_index =  loaded_compre['group_index']
-                self.superNodes_dict = loaded_compre['superNodes_dict']
-                self.curr_feat = copy.deepcopy(self.node_feat)
+                        # 判断是否停止当前数据集的训练
+                        if bad_counter == self.args.bad_counter:
+                            break
 
-                count_reward, batch_id = 0, 0
-                traverse_time = 0
-                for idx in range(len(self.group_index)):
-                    if(len(self.group_index[idx]) < 3):
-                        continue
-                    curr_row, curr_col = self.select_action(self.curr_feat[[self.init_nd_idx[i] for i in self.group_index[idx]]])
+                    # 判断是否需要重新分组
+                    if best > self.max_reward_by_inner_iter:
+                        self.max_reward_by_inner_iter = best
+                    elif best < (self.max_reward_by_inner_iter / 3):
+                        self.max_reward_by_inner_iter = 0
+                        assert self.best_graph.number_of_nodes() == len(self.best_superNodes_dict)
 
-                    curr_reward = self.update_graph(self.group_index[idx][curr_row], self.group_index[idx][curr_col], self.curr_graph) 
+                        self.num_partitions = self.best_graph.number_of_nodes() // self.args.group_size
 
-                    if(curr_reward > 0):
-                        count_reward += curr_reward
-                        self.group_index[idx] = np.delete(self.group_index[idx], curr_col)
+                        h_function = list(range(self.init_graph.number_of_nodes()))
+                        random.shuffle(h_function)
 
+                        F_A_dict = {}
+                        for A in self.best_superNodes_dict:
+                            F_A = self.init_graph.number_of_nodes()
+                            for v in self.best_superNodes_dict[A]:
+                                f_v = self.init_graph.number_of_nodes()
+                                for u in list(self.init_graph[v]) + [v]:
+                                    if h_function[self.init_nd_idx[int(u)]] < f_v:
+                                        f_v = h_function[self.init_nd_idx[int(u)]]
 
-                policy_loss=0
-                # len_loss = len(self.model.saved_log_probs)
-                returns = torch.FloatTensor(self.model.rewards)
-                returns = (returns - max(returns.mean(), 0)) / (returns.std())# + eps)
+                                if f_v < F_A:
+                                    F_A = f_v
 
-                for log_prob, R in zip(self.model.saved_log_probs, returns):
-                    policy_loss += - log_prob * R
+                            F_A_dict[A] = F_A
+                        F_A_list = sorted(F_A_dict.items(), key=lambda item: item[1])
 
-                self.optimizer.zero_grad()
-                policy_loss.backward()
-                self.optimizer.step()
+                        self.best_groupIndex = []
+                        for i in range(self.num_partitions):
+                            curr_idx = []
+                            for j in F_A_list[int(i * len(F_A_list) / self.num_partitions): int((i + 1) * len(F_A_list) / self.num_partitions)]:
+                                curr_idx.append(j[0])
+                            self.best_groupIndex.append(np.array(curr_idx))
 
-                print('Count {}; Positive Count Reward: {};\n'.format(count, count_reward))
+                    # 保存当前最好的结果
+                    self.node_feat = self.best_currFeat
+                    f = open('./{}_{}_.best_temp'.format(self.args.dataset, count + 1), 'wb')
+                    pickle.dump({'g': self.best_graph, 'group_index': self.best_groupIndex, 'superNodes_dict': self.best_superNodes_dict}, f)
+                    f.close()
 
-                del self.model.rewards[:]
-                del self.model.saved_log_probs[:]
+                    # 删除之前保存的临时文件
+                    files = glob.glob('./{}_{}_.best_temp'.format(self.args.dataset, count))
+                    for fil in files:
+                        os.remove(fil)
 
-
-                if(count < 5):
-                    ratio = 0.001
-                else:
-                    ratio = 0.01
-                if(count_reward > (1 + ratio)*best):
-                    best, bad_counter = count_reward, 0
-
-                    self.best_graph, self.best_currFeat, self.best_groupIndex = self.curr_graph, self.curr_feat, self.group_index
-                    self.best_superNodes_dict = self.superNodes_dict
-                else:
-                    bad_counter += 1
-
-                if(bad_counter == self.args.bad_counter):
-                    # total_rewards += best
-                    break
-
-            ## to determine if needs to execute group partitioning for another time
-            if(best > self.max_reward_by_inner_iter):
-                self.max_reward_by_inner_iter = best
-            elif(best < (self.max_reward_by_inner_iter/3)):
-                ## regrouping (group partitioning)
-                self.max_reward_by_inner_iter = 0
-                assert(self.best_graph.number_of_nodes() == len(self.best_superNodes_dict))
-
-                self.num_partitions = self.best_graph.number_of_nodes()//self.args.group_size
-
-                h_function = list(range(self.init_graph.number_of_nodes()))
-                random.shuffle(h_function)
-
-                F_A_dict = {}
-                for A in self.best_superNodes_dict:
-                    F_A = self.init_graph.number_of_nodes()
-                    for v in self.best_superNodes_dict[A]:
-                        f_v = self.init_graph.number_of_nodes()
-                        for u in list(self.init_graph[v]) + [v]:
-                            if(h_function[self.init_nd_idx[int(u)]] < f_v):
-                                f_v = h_function[self.init_nd_idx[int(u)]]
-
-                        if(f_v < F_A):
-                            F_A = f_v
-
-                    F_A_dict[A] = F_A
-                F_A_list = sorted(F_A_dict.items(), key=lambda item:item[1])
-
-                self.best_groupIndex = []
-                for i in range(self.num_partitions):
-                    curr_idx = []
-                    for j in F_A_list[int(i*len(F_A_list)/self.num_partitions): int((i+1)*len(F_A_list)/self.num_partitions)]:
-                        curr_idx.append(j[0])
-                    
-                    self.best_groupIndex.append(np.array(curr_idx))
-
-
-            self.node_feat = self.best_currFeat
-            f = open('./{}_{}_.best_temp'.format(self.args.dataset, count+1), 'wb')
-            pickle.dump({'g':self.best_graph, 'group_index':self.best_groupIndex, 'superNodes_dict':self.best_superNodes_dict}, f)
-            f.close()
-
-            files = glob.glob('./{}_{}_.best_temp'.format(self.args.dataset, count))
-            for fil in files:
-                os.remove(fil)
-            print('------\n')
-                
-
-
-        files = glob.glob('./{}_*_.best_temp'.format(self.args.dataset))
-        for fil in files:
-            os.remove(fil)
-
+                # 删除该数据集的所有临时文件
+                files = glob.glob('./{}_*_.best_temp'.format(self.args.dataset))
+                for fil in files:
+                    os.remove(fil)
+        
+            print(f"\n---- Finished training on all datasets for epoch {epoch + 1} ----\n")
+            
+        print("\n-------Training completed---------.\n")
+        torch.save({
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+        }, "trained_model_checkpoint.pth")
+        print("模型参数和状态保存成功: trained_model_checkpoint.pth")
+                        
+                                
 
 #---------------------------------------------------------------------------------------------------------------------------------
     def encode(self):
@@ -622,4 +650,58 @@ class PoligrasRunner(object):
         f = open('./{}_graph_summary'.format(self.args.dataset), 'wb')
         pickle.dump({'superNodes_dict': self.superNodes_dict, 'superEdge_list': self.superEdges, 'self_edge_list': self_edge, 'correctionSet_plus_list': self.correctionSet_plus, 'correctionSet_minus_list': self.correctionSet_minus}, f)
         f.close()
+#---------------------------------------------------------------------------------------------------------------------------------
+    def test(self):
+        print("\n-------Model testing---------.\n")
+        # 加载模型检查点
+        checkpoint = torch.load("trained_model_checkpoint.pth")
+        # 恢复模型状态
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        # 切换到评估模式
+        self.model.eval()
 
+        total_rewards = 0  # 总奖励
+        correct_predictions = 0  # 正确预测数量
+        total_predictions = 0  # 总预测数量
+
+        # 遍历每个测试数据集，假设 self.args.test_datasets 包含测试集名称列表
+        for dataset in self.args.test_datasets:
+            
+            self.load_data_of_dataset(dataset)
+
+            # 初始化当前测试数据集的图结构和节点特征
+            # 假设 self.init_test_graph 和 self.init_test_node_feat 是测试数据集的图和特征
+            self.curr_graph = copy.deepcopy(self.init_graph)
+            self.curr_feat = copy.deepcopy(self.node_feat)
+            
+            # 假设 self.init_test_group_index 是测试数据集的初始节点分组
+            self.group_index = copy.deepcopy(self.init_group_index)
+            
+            correct_predictions, total_predictions = 0, 0  # 初始化测试集的预测计数
+            total_rewards = 0  # 初始化总奖励
+
+            # 使用 no_grad 来禁用梯度计算
+            with torch.no_grad():
+                # 遍历节点组进行测试
+                for idx in range(len(self.group_index)):
+                    if len(self.group_index[idx]) < 3:
+                        continue
+                    # 使用 select_action 函数选择要合并的节点对（模拟模型决策）
+                    curr_row, curr_col = self.select_action(self.curr_feat[[self.init_nd_idx[i] for i in self.group_index[idx]]])
+
+                    # 通过 update_graph 函数执行测试，获取奖励值
+                    curr_reward = self.update_graph(self.group_index[idx][curr_row], self.group_index[idx][curr_col], self.curr_graph)
+
+                    # 计算预测的表现（假设 curr_reward 为正时表示正确预测）
+                    if curr_reward > 0:
+                        correct_predictions += 1
+                    total_predictions += 1
+
+                    total_rewards += curr_reward
+
+            # 输出每个数据集的测试结果
+            accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
+            print(f"Dataset: {self.args.dataset}; Total rewards: {total_rewards}; Accuracy: {accuracy:.4f}\n")
+
+        print(f"\n-------Testing completed with overall accuracy: {accuracy:.4f} -------.\n")

@@ -40,7 +40,7 @@ if __name__ == "__main__":
         
 
         curr_feat = [0.0]*feat_size#[0.0]*(min_nei//interval_size)
-        t1 = time.time()
+        #t1 = time.time()
         for nei in nei_list:
             row = node_dict[nei]//(num_node//1024)
             curr_feat[min(row,1023)] += 1.0

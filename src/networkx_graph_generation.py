@@ -7,7 +7,7 @@ from os.path import basename
 
 
 def load_initial_graph(dataset_name):
-    dir = './' + dataset_name + '/' + dataset_name + '.graph-txt'
+    dir = './dataset/' + dataset_name + '/' + dataset_name + '.graph-txt'
 
     G = nx.Graph()
 
